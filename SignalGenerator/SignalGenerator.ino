@@ -2,21 +2,24 @@
 #include <Adafruit_TinyUSB.h> // Included in the Pi Pico Arduino board setup, select from Tools->USB Stack // Don't install this library separately
 #include <EEPROM.h>
 
+/* Settings
+
+150Mhz Overclock
+-Ofast optimise
+Adafruit TinyUSB
+*/
+
 #define MISO D0
 #define CS1 D1
 #define SCK D2
 #define MOSI D3
 #define LATCH_DAC D4
 
-SPISettings spisettings(16000000, MSBFIRST, SPI_MODE0);
+SPISettings spisettings(24000000, MSBFIRST, SPI_MODE0);
 
-const int FS = 40000;
-const float FREQ = 1000.0f;
-const int MICROS_PER_SAMPLE = 1000000 / FS; // ensure this is an integer result!
-const float FULL_SCALE_2VPP = 111.65;
-float phase = 0; // 0 ... 1
-float inc = FREQ / FS;
-uint64_t lastTimestamp = 0;
+const int TABLE_SIZE = 150;
+float table[] = {0.0, 0.04187565372919963, 0.0836778433323155, 0.12533323356430426, 0.16676874671610228, 0.20791169081775931, 0.2486898871648548, 0.2890317969444716, 0.32886664673858323, 0.3681245526846779, 0.40673664307580015, 0.44463517918492745, 0.4817536741017153, 0.5180270093731302, 0.5533915492433441, 0.5877852522924731, 0.6211477802783104, 0.6534206039901054, 0.6845471059286886, 0.7144726796328034, 0.7431448254773941, 0.7705132427757893, 0.7965299180241963, 0.8211492091337039, 0.8443279255020151, 0.8660254037844386, 0.8862035792312147, 0.9048270524660196, 0.9218631515885005, 0.9372819894918915, 0.9510565162951535, 0.9631625667976582, 0.9735789028731603, 0.9822872507286886, 0.9892723329629883, 0.9945218953682733, 0.9980267284282716, 0.9997806834748455, 0.9997806834748455, 0.9980267284282716, 0.9945218953682734, 0.9892723329629883, 0.9822872507286886, 0.9735789028731603, 0.9631625667976582, 0.9510565162951536, 0.9372819894918916, 0.9218631515885005, 0.9048270524660195, 0.8862035792312148, 0.8660254037844387, 0.844327925502015, 0.8211492091337041, 0.7965299180241964, 0.7705132427757893, 0.7431448254773945, 0.7144726796328033, 0.6845471059286888, 0.6534206039901056, 0.6211477802783105, 0.5877852522924732, 0.5533915492433441, 0.5180270093731302, 0.4817536741017156, 0.44463517918492734, 0.40673664307580004, 0.36812455268467814, 0.3288666467385834, 0.2890317969444717, 0.24868988716485482, 0.20791169081775931, 0.16676874671610262, 0.12533323356430454, 0.08367784333231529, 0.04187565372919981, 1.2246467991473532e-16, -0.04187565372919957, -0.08367784333231504, -0.12533323356430429, -0.16676874671610195, -0.20791169081775907, -0.24868988716485502, -0.28903179694447145, -0.3288666467385831, -0.3681245526846783, -0.4067366430757998, -0.44463517918492756, -0.481753674101715, -0.51802700937313, -0.5533915492433443, -0.587785252292473, -0.6211477802783103, -0.653420603990105, -0.6845471059286887, -0.7144726796328035, -0.743144825477394, -0.7705132427757894, -0.7965299180241959, -0.8211492091337037, -0.8443279255020153, -0.8660254037844385, -0.8862035792312145, -0.9048270524660198, -0.9218631515885004, -0.9372819894918915, -0.9510565162951535, -0.9631625667976581, -0.9735789028731603, -0.9822872507286887, -0.9892723329629883, -0.9945218953682733, -0.9980267284282716, -0.9997806834748455, -0.9997806834748455, -0.9980267284282716, -0.9945218953682733, -0.9892723329629883, -0.9822872507286887, -0.9735789028731603, -0.9631625667976582, -0.9510565162951536, -0.9372819894918916, -0.9218631515885005, -0.9048270524660199, -0.8862035792312147, -0.8660254037844386, -0.8443279255020155, -0.8211492091337039, -0.7965299180241961, -0.7705132427757896, -0.743144825477394, -0.7144726796328037, -0.684547105928689, -0.6534206039901057, -0.6211477802783106, -0.5877852522924734, -0.5533915492433442, -0.5180270093731303, -0.4817536741017153, -0.44463517918492745, -0.40673664307580015, -0.3681245526846787, -0.3288666467385839, -0.28903179694447134, -0.24868988716485535, -0.20791169081775987, -0.16676874671610187, -0.12533323356430465, -0.08367784333231584, -0.04187565372919993};
+int idx = 0;
 uint16_t value = 0;
 
 uint8_t tx[2] = {0};
@@ -26,12 +29,15 @@ float measuredRms = 0.0f;
 float scalerFloat = 2047.0f;
 float scalerFloatFiltered = 2047.0f;
 
+const float FULL_SCALE_2VPP = 115.5f;
 float targetRms = FULL_SCALE_2VPP;
 float targetRmsFiltered = FULL_SCALE_2VPP;
 float filteredOutputValue = 0.0f;
 float outputSum = 0.0f;
 float scaleCompensation = 0.0f;
-uint32_t idx = 0;
+
+int iterations = 0;
+
 
 void setup() 
 {
@@ -60,7 +66,7 @@ void setup()
     SPI.setTX(MOSI);
     SPI.begin(false);
 
-    while(!Serial) {}
+    //while(!Serial) {}
 
     EEPROM.get(0, scaleCompensation);
     Serial.print("Loaded compensation value from EEPROM: ");
@@ -106,9 +112,9 @@ void loop()
     if (scalerFloat < 0) scalerFloat = 0;
     scalerFloatFiltered = scalerFloatFiltered * 0.999f + scalerFloat * 0.001f;
 
-    idx++;
+    iterations++;
 
-    if (idx % 10000 == 0)
+    /*if (iterations % 10000 == 0)
     {
         Serial.print("RMS Target: ");
         Serial.print(targetRmsFiltered, 4);
@@ -124,9 +130,9 @@ void loop()
 
         Serial.print("   Scale Compensation: ");
         Serial.println(scaleCompensation, 4);
-    }
+    }*/
 
-    if (idx == 1000000)
+    if (iterations == 1000000)
     {
         Serial.print("Saving Scale compensation factor to EEPROM: ");
         Serial.println(scaleCompensation);
@@ -135,40 +141,50 @@ void loop()
     }
 }
 
+uint64_t nextSampleTime = 0;
+
 void loop1()
 {
-    while (micros() - lastTimestamp < MICROS_PER_SAMPLE) // ensure samplerate
+    /*while(true)
     {
-        // wait until next sample
-    }
+        auto st = rp2040.getCycleCount64();
+        if (st >= nextSampleTime)
+        {
+            nextSampleTime = st;
+            break;
+        }
+    }*/
 
-    lastTimestamp = micros();
-
-    value = sinf(phase * 2 * M_PI) * scalerFloatFiltered + 2048;
-    phase += inc;
-    if (phase >= 1.0f) phase -= 1.0f;
+    value = int(table[idx] * scalerFloatFiltered) + 2048;
+    idx = (idx + 1) % TABLE_SIZE;
 
     // REGISTER 5-1 in datasheet. Channel A, 1x gain, activate channel
     tx[0] = 0b00110000 | (value >> 8);
     tx[1] = value & 0xFF;
 
-    digitalWrite(CS1, LOW);
-    //digitalWrite(CS1, LOW);
-    //digitalWrite(CS1, LOW);
-    //digitalWrite(CS1, LOW);
-
+    gpio_put(CS1, false);
+    gpio_put(CS1, false);
+    gpio_put(CS1, false);
+    gpio_put(CS1, false);
+    gpio_put(CS1, false);
+    gpio_put(CS1, false);
+    gpio_put(CS1, false);
+    
     SPI.beginTransaction(spisettings);
     SPI.transfer(tx, 2);
     SPI.endTransaction();
 
-    digitalWrite(CS1, HIGH);
-    //digitalWrite(CS1, HIGH);
-    //digitalWrite(CS1, HIGH);
-    //digitalWrite(CS1, HIGH);
+    gpio_put(CS1, true);
+    gpio_put(CS1, true);
+    gpio_put(CS1, true);
+    gpio_put(CS1, true);
 
-    digitalWrite(LATCH_DAC, LOW);
-    digitalWrite(LATCH_DAC, LOW);
-    digitalWrite(LATCH_DAC, LOW);
-    digitalWrite(LATCH_DAC, LOW);
-    digitalWrite(LATCH_DAC, HIGH);
+    gpio_put(LATCH_DAC, false);
+    gpio_put(LATCH_DAC, false);
+    gpio_put(LATCH_DAC, false);
+    gpio_put(LATCH_DAC, false);
+    gpio_put(LATCH_DAC, true);
+    gpio_put(LATCH_DAC, true);
+    gpio_put(LATCH_DAC, true);
+    gpio_put(LATCH_DAC, true);
 }
