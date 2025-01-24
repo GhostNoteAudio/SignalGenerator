@@ -35,6 +35,7 @@ float iter = 0.0f;
 volatile float amplitude = 1e9;
 bool noiseMode = false;
 const float RAND_SCALER = (float)(2.0 / RAND_MAX);
+float adjustment = 1.0f;
 
 void setup() 
 {
@@ -43,6 +44,18 @@ void setup()
 
     Serial.begin(115200);
     EEPROM.begin(512);
+
+    //while(!Serial) {}
+
+    // load adjustment value from EEPROM
+    uint16_t adjVal = *((uint16_t*)&(EEPROM[0]));
+    if (adjVal >= 800 && adjVal <= 1200)
+    {
+        adjustment = adjVal * 0.001f;
+        Serial.print("Setting adjument from EEPROM to: ");
+        Serial.println(adjustment, 3);
+        Serial.println("To change it, send Serial command 'adj=XXXX' where XXXX is between 800 and 1200");
+    }
     
     pinMode(MISO, INPUT);
     pinMode(MOSI, OUTPUT);
@@ -81,12 +94,12 @@ void setup()
       Serial.println("I2S started!");
     }
 
-    delay(100);
+    delay(500);
 }
 
 void setup1()
 {
-    delay(1000);
+    delay(200);
 }
 
 int slideCounters[3] = {0};
@@ -140,24 +153,85 @@ void updateSlideCounters()
     if (slideCounters[2] == 10) activeCounter = 2;
 }
 
+float trimpotToGain(float value)
+{
+    if (value >= 512.0f)
+    {
+        value = (value - 512.0f) / 450.0f;
+        if (value < 0.1f) value = 0.1f;
+        if (value > 1.0f) value = 1.0f;
+    }
+    else // value < 512.0f
+    {
+        value = 511 - value;
+        value = value / 450.0f;
+        if (value < 0.1f) value = 0.1f;
+        if (value > 1.0f) value = 1.0f;
+    }
+
+    value = value * value;
+    return value;
+}
+
+char serialBuffer[32];
+int serialCount = 0;
+
+void processSerialInput()
+{
+    serialBuffer[serialCount] = '\0';
+    auto str = String(serialBuffer);
+    str.trim();
+    Serial.print("Serial data received: ");
+    Serial.println(str);
+    if (str.startsWith("adj="))
+    {
+        uint16_t value = str.substring(4).toInt();
+        if (value >= 800 && value <= 1200)
+        {
+            Serial.print("Adjustment value set to: ");
+            Serial.println(value);
+            EEPROM.put(0, value);
+            EEPROM.commit();
+            adjustment = value * 0.001f;
+            Serial.print("Setting adjument from EEPROM to: ");
+            Serial.println(adjustment, 3);
+        }
+    }
+}
+
 void loop1()
 {
     float trimValue = analogRead(ADC0);
-    float newScaler;
-    if (trimValue > 900)
-        newScaler = 1.0f;
-    else
-        newScaler = trimValue * 0.0011111111111111f; // / 900;
+    float newScaler = trimpotToGain(trimValue);
+
+    if (trimValue < 512 - 20) noiseMode = true;
+    else if (trimValue > 512 + 20) noiseMode = false;
 
     scaler = scaler * 0.99f + newScaler * 0.01f;
     updateSlideCounters();
     
     float slider = 0.0f;
     if (activeCounter == 2) slider = 1.391e9;
-    else if (activeCounter == 1) slider = 0.795e9;
-    else if (activeCounter == 0) slider = 0.3565e9;
+    else if (activeCounter == 1) slider = 0.801e9;
+    else if (activeCounter == 0) slider = 0.358e9;
 
-    amplitude = slider * scaler;
+    amplitude = slider * scaler * adjustment;
+
+    while (Serial.available() > 0)
+    {
+        char ch = Serial.read();
+        if (ch == '\n')
+        {
+            processSerialInput();
+            serialCount = 0;
+        }
+        else if (serialCount < 31)
+        {
+          serialBuffer[serialCount] = ch;
+          serialCount++;
+        }
+    }
+
     delay(1);
 }
 
