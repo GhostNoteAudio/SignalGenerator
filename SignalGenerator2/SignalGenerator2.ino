@@ -15,7 +15,7 @@ I2S i2s(OUTPUT);
 #define LRCLK D5
 #define MCLK D6
 
-#define GPIO_OUT D11
+//#define GPIO_OUT D11
 #define CODEC_RESET D12
 
 #define SLIDE3 D22
@@ -63,7 +63,7 @@ void setup()
     pinMode(LRCLK, OUTPUT);
     pinMode(MCLK, OUTPUT);
 
-    pinMode(GPIO_OUT, OUTPUT);
+    //pinMode(GPIO_OUT, OUTPUT);
     pinMode(CODEC_RESET, OUTPUT);
 
     pinMode(SLIDE3, INPUT);
