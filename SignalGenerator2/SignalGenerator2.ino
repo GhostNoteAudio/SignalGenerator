@@ -3,6 +3,7 @@
 #include <EEPROM.h>
 #include "control_TLV320AIC3204.h"
 #include <I2S.h>
+#include "randomgen.h"
 
 I2S i2s(OUTPUT);
 
@@ -24,7 +25,7 @@ I2S i2s(OUTPUT);
 
 #define ADC0 A0
 
-float scaler = 1.0f;
+float trimGain = 1.0f;
 
 AudioControlTLV320AIC3204 codec;
 
@@ -32,10 +33,12 @@ const float inc = 2 * M_PI * 1000.0 / 48000.0;
 const int32_t samplerate = 48000;
 const float ITERMAX = 2 * M_PI;
 float iter = 0.0f;
-volatile float amplitude = 1e9;
+volatile int32_t amplitude = 30000;
 bool noiseMode = false;
-const float RAND_SCALER = (float)(2.0 / RAND_MAX);
 float adjustment = 1.0f;
+
+int slideCounters[3] = {0};
+int sliderPos = 0;
 
 void setup() 
 {
@@ -102,9 +105,6 @@ void setup1()
     delay(200);
 }
 
-int slideCounters[3] = {0};
-int activeCounter = 0;
-
 void updateSlideCounters()
 {
     auto s0 = digitalRead(SLIDE1);
@@ -148,9 +148,9 @@ void updateSlideCounters()
       if (slideCounters[2] < 0) slideCounters[2] = 0;
     }
 
-    if (slideCounters[0] == 10) activeCounter = 0;
-    if (slideCounters[1] == 10) activeCounter = 1;
-    if (slideCounters[2] == 10) activeCounter = 2;
+    if (slideCounters[0] == 10) sliderPos = 0;
+    if (slideCounters[1] == 10) sliderPos = 1;
+    if (slideCounters[2] == 10) sliderPos = 2;
 }
 
 float trimpotToGain(float value)
@@ -199,23 +199,33 @@ void processSerialInput()
     }
 }
 
+const int32_t OUTPUT_SCALER = 15000;
+
 void loop1()
 {
     float trimValue = analogRead(ADC0);
-    float newScaler = trimpotToGain(trimValue);
+    float newTrimGain = trimpotToGain(trimValue);
 
     if (trimValue < 512 - 20) noiseMode = true;
     else if (trimValue > 512 + 20) noiseMode = false;
 
-    scaler = scaler * 0.99f + newScaler * 0.01f;
+    trimGain = trimGain * 0.99f + newTrimGain * 0.01f;
     updateSlideCounters();
     
-    float slider = 0.0f;
-    if (activeCounter == 2) slider = 1.391e9;
-    else if (activeCounter == 1) slider = 0.801e9;
-    else if (activeCounter == 0) slider = 0.358e9;
+    float selectedGain = 0.0f;
+    if (sliderPos == 2)
+        selectedGain = 1.228f;
+    else if (sliderPos == 1)
+        selectedGain = 0.707f;
+    else if (sliderPos == 0)
+    {
+        if (noiseMode) // in this mode, we want 1vPP pink noise
+            selectedGain = 0.707f * 6.8f;
+        else
+            selectedGain = 0.316f;
+    }
 
-    amplitude = slider * scaler * adjustment;
+    amplitude = selectedGain * trimGain * adjustment * OUTPUT_SCALER;
 
     while (Serial.available() > 0)
     {
@@ -235,23 +245,31 @@ void loop1()
     delay(1);
 }
 
+RandGen rng;
 
 void loop()
 {
-    float s;
+    int32_t sample_out;
 
     if (noiseMode)
     {
-        s = (rand() * RAND_SCALER - 1) * amplitude;
+        if (sliderPos == 0)
+        {
+            sample_out = rng.getPinkNoise() * amplitude;
+        }
+        else
+        {
+            sample_out = rng.getWhiteNoise() * amplitude;
+        }
     }
     else
     {
-        s = sinf(iter) * amplitude;
+        sample_out = (sinf(iter) * 32767.0f) * amplitude;
         iter += inc;
         if (iter >= ITERMAX) 
           iter -= ITERMAX;
     }
     // write the same sample twice, once for left and once for the right channel
-    i2s.write((int32_t)s);
-    i2s.write((int32_t)s);
+    i2s.write(sample_out);
+    i2s.write(sample_out);
 }
