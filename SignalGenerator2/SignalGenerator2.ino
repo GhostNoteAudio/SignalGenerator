@@ -7,6 +7,8 @@
 
 I2S i2s(OUTPUT);
 
+const int32_t OUTPUT_SCALER = 34600;
+
 #define SDA D0
 #define SCL D1
 
@@ -199,8 +201,6 @@ void processSerialInput()
     }
 }
 
-const int32_t OUTPUT_SCALER = 15000;
-
 void loop1()
 {
     float trimValue = analogRead(ADC0);
@@ -219,8 +219,8 @@ void loop1()
         selectedGain = 0.707f;
     else if (sliderPos == 0)
     {
-        if (noiseMode) // in this mode, we want 1vPP pink noise
-            selectedGain = 0.707f * 6.8f;
+        if (noiseMode) // pink noise, needs boosting to gain match
+            selectedGain = 0.707f * 4.0f;
         else
             selectedGain = 0.316f;
     }
