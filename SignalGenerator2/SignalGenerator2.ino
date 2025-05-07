@@ -5,9 +5,13 @@
 #include <I2S.h>
 #include "randomgen.h"
 
+#define MODE_BUTTON_SUPPORT true
+#define OUTPUT_MODE_COUNT 3
+
 I2S i2s(OUTPUT);
 
 const int32_t OUTPUT_SCALER = 34600;
+
 
 #define SDA D0
 #define SCL D1
@@ -24,6 +28,7 @@ const int32_t OUTPUT_SCALER = 34600;
 #define SLIDE3 D22
 #define SLIDE2 D23
 #define SLIDE1 D24
+#define BUTTON_MODE D21
 
 #define ADC0 A0
 
@@ -36,11 +41,13 @@ const int32_t samplerate = 48000;
 const float ITERMAX = 2 * M_PI;
 float iter = 0.0f;
 volatile int32_t amplitude = 30000;
-bool noiseMode = false;
+int outputMode = 0;
 float adjustment = 1.0f;
 
 int slideCounters[3] = {0};
 int sliderPos = 0;
+int buttonCounter = 0;
+bool buttonState = false;
 
 void setup() 
 {
@@ -107,6 +114,27 @@ void setup1()
     delay(200);
 }
 
+bool updateButtonCounter() // returns true on change
+{
+    auto btn = digitalRead(BUTTON_MODE);
+    if (btn)
+        buttonCounter++;
+    else
+        buttonCounter--;
+
+    if (buttonCounter > 10) buttonCounter = 10;
+    if (buttonCounter < 0) buttonCounter = 0;
+
+    auto currentButtonState = buttonState;
+    
+    if (buttonCounter == 10)
+        buttonState = true;
+    if (buttonCounter == 0)
+        buttonState = false;
+    
+    return currentButtonState != buttonState;
+}
+
 void updateSlideCounters()
 {
     auto s0 = digitalRead(SLIDE1);
@@ -157,21 +185,32 @@ void updateSlideCounters()
 
 float trimpotToGain(float value)
 {
-    if (value >= 512.0f)
+    if (MODE_BUTTON_SUPPORT)
     {
-        value = (value - 512.0f) / 450.0f;
-        if (value < 0.1f) value = 0.1f;
+        value = value / 930.0f;
+        if (value < 0.05f) value = 0.05f;
         if (value > 1.0f) value = 1.0f;
+        value = value * value;
     }
-    else // value < 512.0f
+    else
     {
-        value = 511 - value;
-        value = value / 450.0f;
-        if (value < 0.1f) value = 0.1f;
-        if (value > 1.0f) value = 1.0f;
+        if (value >= 512.0f)
+        {
+            value = (value - 512.0f) / 450.0f;
+            if (value < 0.1f) value = 0.1f;
+            if (value > 1.0f) value = 1.0f;
+        }
+        else // value < 512.0f
+        {
+            value = 511 - value;
+            value = value / 450.0f;
+            if (value < 0.1f) value = 0.1f;
+            if (value > 1.0f) value = 1.0f;
+        }
+
+        value = value * value;
     }
 
-    value = value * value;
     return value;
 }
 
@@ -206,8 +245,19 @@ void loop1()
     float trimValue = analogRead(ADC0);
     float newTrimGain = trimpotToGain(trimValue);
 
-    if (trimValue < 512 - 20) noiseMode = true;
-    else if (trimValue > 512 + 20) noiseMode = false;
+    if (MODE_BUTTON_SUPPORT)
+    {
+        auto btn = updateButtonCounter();
+        if (btn && !buttonState)
+        {
+            outputMode = (outputMode + 1) % OUTPUT_MODE_COUNT;
+        }
+    }
+    else
+    {
+        if (trimValue < 512 - 20) outputMode = sliderPos == 0 ? 2 : 1;
+        else if (trimValue > 512 + 20) outputMode = 0;
+    }
 
     trimGain = trimGain * 0.99f + newTrimGain * 0.01f;
     updateSlideCounters();
@@ -218,11 +268,14 @@ void loop1()
     else if (sliderPos == 1)
         selectedGain = 0.707f;
     else if (sliderPos == 0)
+        selectedGain = 0.316f;
+
+    if (outputMode == 2) // pink noise
     {
-        if (noiseMode) // pink noise, needs boosting to gain match
-            selectedGain = 0.707f * 4.0f;
-        else
-            selectedGain = 0.316f;
+        selectedGain *= 2.3;
+
+        if (!MODE_BUTTON_SUPPORT) // pink noise only available on -10dBv, but we want +4dbu output
+            selectedGain *= 3.8861; //scale by 1.228 / 0.316 to reach +4dbu
     }
 
     amplitude = selectedGain * trimGain * adjustment * OUTPUT_SCALER;
@@ -251,24 +304,28 @@ void loop()
 {
     int32_t sample_out;
 
-    if (noiseMode)
-    {
-        if (sliderPos == 0)
-        {
-            sample_out = rng.getPinkNoise() * amplitude;
-        }
-        else
-        {
-            sample_out = rng.getWhiteNoise() * amplitude;
-        }
-    }
-    else
+    if (outputMode == 0)
     {
         sample_out = (sinf(iter) * 32767.0f) * amplitude;
         iter += inc;
         if (iter >= ITERMAX) 
           iter -= ITERMAX;
     }
+    else if (outputMode == 1)
+    {
+        auto s16 = rng.getWhiteNoise();
+        if (s16 > 32767) s16 = 32767;
+        if (s16 < -32768) s16 = -32768;
+        sample_out = s16 * amplitude;
+    }
+    else if (outputMode == 2)
+    {
+        auto s16 = rng.getPinkNoise();
+        if (s16 > 32767) s16 = 32767;
+        if (s16 < -32768) s16 = -32768;
+        sample_out = s16 * amplitude;
+    }
+    
     // write the same sample twice, once for left and once for the right channel
     i2s.write(sample_out);
     i2s.write(sample_out);
